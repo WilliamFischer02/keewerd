@@ -40,3 +40,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+*.zip
+*.before-*.tsx
+src/app.zip
+src.zip
+data.zip

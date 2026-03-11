@@ -1,16 +1,11 @@
 "use client";
 
 import { useState } from "react";
-
-type TrendItem = {
-  videoId: string;
-  title: string;
-  channelTitle: string;
-  publishedAt: string;
-  description: string;
-  tags: string[];
-  url: string;
-};
+import {
+  buildYouTubePackaging,
+  ReferenceTrendItem,
+  YouTubePackagingResult,
+} from "@/lib/generators/youtubePackaging";
 
 type TrendResponse = {
   source: "youtube";
@@ -19,7 +14,7 @@ type TrendResponse = {
   regionCode: string;
   videoCategoryId: string;
   fetchedAt: string;
-  items: TrendItem[];
+  items: ReferenceTrendItem[];
   extractedKeywords: string[];
 };
 
@@ -32,143 +27,7 @@ const categoryOptions = [
   { label: "People & Blogs", value: "22" },
 ];
 
-function titleCase(input: string): string {
-  return input
-    .split(" ")
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
-
-function cleanKeyword(keyword: string): string {
-  return keyword
-    .replace(/https?|www|com/gi, "")
-    .replace(/[^\w\s#-]/g, "")
-    .trim();
-}
-
-function hashtagify(words: string[]): string[] {
-  return words
-    .map((word) => cleanKeyword(word))
-    .filter((word) => word.length >= 3)
-    .slice(0, 5)
-    .map((word) => `#${word.replace(/\s+/g, "")}`);
-}
-
-function pickKeywords(keywords: string[], topic: string): string[] {
-  const cleanedTopic = topic.toLowerCase().trim();
-  const topicWords = cleanedTopic.split(/\s+/).filter(Boolean);
-
-  const usable = keywords
-    .map(cleanKeyword)
-    .filter((word) => word && word.length >= 4);
-
-  if (!cleanedTopic) {
-    return usable.slice(0, 5);
-  }
-
-  const overlapping = usable.filter((keyword) =>
-    topicWords.some(
-      (topicWord) =>
-        keyword.toLowerCase().includes(topicWord) ||
-        topicWord.includes(keyword.toLowerCase())
-    )
-  );
-
-  const merged = [...overlapping, ...usable];
-  return [...new Set(merged)].slice(0, 5);
-}
-
-function buildHook(topic: string, tone: string, primaryKeyword: string): string {
-  const displayTopic = titleCase(topic || "Your Topic");
-  const displayTone = titleCase(tone);
-  const displayKeyword = titleCase(primaryKeyword || "");
-
-  if (displayKeyword && topic) {
-    return `${displayKeyword} ${displayTopic}`;
-  }
-
-  if (topic) {
-    return `${displayTone} ${displayTopic}`;
-  }
-
-  return displayKeyword || `${displayTone} Video`;
-}
-
-function buildTitleIdeas(
-  topic: string,
-  tone: string,
-  creatorName: string,
-  videoFormat: string,
-  keywords: string[]
-): string[] {
-  const displayTopic = titleCase(topic || "Your Topic");
-  const displayTone = titleCase(tone);
-  const displayCreator = creatorName.trim() || "[USERNAME]";
-  const displayFormat = videoFormat.trim() || "Video";
-  const picked = pickKeywords(keywords, topic);
-  const primaryKeyword = picked[0] || "";
-  const secondaryKeyword = picked[1] || "";
-  const hook = buildHook(topic, tone, primaryKeyword);
-
-  const templates = [
-    `${hook} | ${displayCreator} | ${displayFormat}`,
-    `${displayTopic}: ${displayTone} ${displayFormat} | ${displayCreator}`,
-    `${displayTopic} but ${titleCase(
-      secondaryKeyword || primaryKeyword || tone
-    )} Changes Everything | ${displayFormat}`,
-    `Why ${displayTopic} Hits So Hard | ${displayCreator} | ${displayFormat}`,
-    `${titleCase(primaryKeyword || displayTopic)} ${displayFormat} | ${displayCreator}`,
-    `${displayTone} ${displayFormat} for ${displayTopic} | ${displayCreator}`,
-  ];
-
-  return [...new Set(templates.map((t) => t.trim()).filter(Boolean))];
-}
-
-function buildDescriptionIdeas(
-  topic: string,
-  tone: string,
-  creatorName: string,
-  videoFormat: string,
-  keywords: string[]
-): string[] {
-  const displayTopic = topic.trim() || "your topic";
-  const displayTone = tone.toLowerCase();
-  const displayFormat = (videoFormat.trim() || "video").toLowerCase();
-  const displayCreator = creatorName.trim() || "[USERNAME]";
-  const picked = pickKeywords(keywords, topic);
-  const keywordLine = picked.length ? picked.join(", ") : "trend signals, creator strategy, publishing ideas";
-  const hashtags = hashtagify([displayTopic, ...picked]).join(" ");
-
-  const seoFirst = `${titleCase(displayTopic)} ${displayFormat} with a ${displayTone} angle focused on ${keywordLine}.
-
-This ${displayFormat} is built for viewers interested in ${displayTopic}, ${keywordLine}, and creator-friendly packaging ideas.
-
-🔗 Links / sponsor / gear:
-[PRIMARY LINK]
-[SECONDARY LINK]
-
-⏱ Chapters:
-00:00 Intro
-00:00 Main section
-00:00 Outro
-
-Created by ${displayCreator}
-${hashtags}`.trim();
-
-  const creatorFirst = `A ${displayTone} ${displayFormat} built around ${displayTopic}.
-
-Expect ${keywordLine}, a clear visual angle, and a streamlined format designed to help viewers understand the topic quickly.
-
-📌 Credits / links / CTA:
-[SUBSCRIBE CTA]
-[COLLAB / SPONSOR LINK]
-[MORE FROM ${displayCreator}]
-
-${hashtags}`.trim();
-
-  return [seoFirst, creatorFirst];
-}
+const isDevelopment = process.env.NODE_ENV !== "production";
 
 export default function ToolPage() {
   const [regionCode, setRegionCode] = useState("US");
@@ -180,6 +39,7 @@ export default function ToolPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<TrendResponse | null>(null);
+  const [packaging, setPackaging] = useState<YouTubePackagingResult | null>(null);
   const [editableTitles, setEditableTitles] = useState<string[]>([]);
   const [editableDescriptions, setEditableDescriptions] = useState<string[]>([]);
 
@@ -204,18 +64,22 @@ export default function ToolPage() {
 
       setData(json);
 
-      const keywords = json.extractedKeywords ?? [];
+      const nextPackaging = buildYouTubePackaging({
+        topic,
+        tone,
+        creatorName,
+        videoFormat,
+        extractedKeywords: json.extractedKeywords ?? [],
+        items: json.items ?? [],
+      });
 
-      setEditableTitles(
-        buildTitleIdeas(topic, tone, creatorName, videoFormat, keywords)
-      );
-
-      setEditableDescriptions(
-        buildDescriptionIdeas(topic, tone, creatorName, videoFormat, keywords)
-      );
+      setPackaging(nextPackaging);
+      setEditableTitles(nextPackaging.titles);
+      setEditableDescriptions(nextPackaging.descriptions);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
       setData(null);
+      setPackaging(null);
       setEditableTitles([]);
       setEditableDescriptions([]);
     } finally {
@@ -225,6 +89,10 @@ export default function ToolPage() {
 
   function copyText(text: string) {
     navigator.clipboard.writeText(text);
+  }
+
+  function copyList(values: string[]) {
+    navigator.clipboard.writeText(values.join(", "));
   }
 
   function updateTitle(index: number, value: string) {
@@ -248,7 +116,8 @@ export default function ToolPage() {
             YouTube trend helper
           </h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-600">
-            Topic-aware keyword extraction plus editable title and description drafts.
+            Topic-aware keyword extraction with cleaner title logic, structured descriptions,
+            and a first dedicated tag bundle output.
           </p>
         </div>
 
@@ -273,7 +142,9 @@ export default function ToolPage() {
                 <select
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
                   value={regionCode}
-                  onChange={(e) => setRegionCode(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                    setRegionCode(e.target.value)
+                  }
                 >
                   <option value="US">US</option>
                   <option value="CA">CA</option>
@@ -287,7 +158,9 @@ export default function ToolPage() {
                 <select
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
                   value={videoCategoryId}
-                  onChange={(e) => setVideoCategoryId(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                    setVideoCategoryId(e.target.value)
+                  }
                 >
                   {categoryOptions.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -302,7 +175,9 @@ export default function ToolPage() {
                 <select
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
                   value={tone}
-                  onChange={(e) => setTone(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                    setTone(e.target.value)
+                  }
                 >
                   <option>Cinematic</option>
                   <option>Hype</option>
@@ -318,8 +193,10 @@ export default function ToolPage() {
                 <input
                   type="text"
                   value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  placeholder="Example: car edit, horror short, phonk drift reel"
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setTopic(e.target.value)
+                  }
+                  placeholder="Example: Tony Soprano video essay, brother prank, phonk drift edit"
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
                 />
               </div>
@@ -329,10 +206,15 @@ export default function ToolPage() {
                 <input
                   type="text"
                   value={creatorName}
-                  onChange={(e) => setCreatorName(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setCreatorName(e.target.value)
+                  }
                   placeholder="Example: BingusTheWizard"
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Used in description drafts, not forced into every title.
+                </p>
               </div>
 
               <div>
@@ -340,7 +222,9 @@ export default function ToolPage() {
                 <input
                   type="text"
                   value={videoFormat}
-                  onChange={(e) => setVideoFormat(e.target.value)}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setVideoFormat(e.target.value)
+                  }
                   placeholder="Example: Edit, Breakdown, AMV, Short Film"
                   className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
                 />
@@ -360,14 +244,30 @@ export default function ToolPage() {
 
           <section className="space-y-6">
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
-              <h2 className="text-lg font-semibold">Trend keywords</h2>
-              <p className="mt-2 text-sm text-gray-600">
-                Source mode: {data?.mode === "topicSearch" ? "topic-aware YouTube search" : "YouTube mostPopular chart"}
-              </p>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">Trend keywords</h2>
+                  <p className="mt-2 text-sm text-gray-600">
+                    Source mode:{" "}
+                    {data?.mode === "topicSearch"
+                      ? "topic-aware YouTube search"
+                      : "YouTube mostPopular chart"}
+                  </p>
+                </div>
+
+                {packaging?.keywordChips?.length ? (
+                  <button
+                    onClick={() => copyList(packaging.keywordChips)}
+                    className="rounded-lg border border-gray-300 px-3 py-1 text-xs font-medium"
+                  >
+                    Copy all
+                  </button>
+                ) : null}
+              </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                {data?.extractedKeywords?.length ? (
-                  data.extractedKeywords.map((keyword) => (
+                {packaging?.keywordChips?.length ? (
+                  packaging.keywordChips.map((keyword) => (
                     <button
                       key={keyword}
                       onClick={() => copyText(keyword)}
@@ -378,7 +278,7 @@ export default function ToolPage() {
                   ))
                 ) : (
                   <p className="text-sm text-gray-500">
-                    Run a search to populate keywords.
+                    Run a search to populate cleaner keyword chips.
                   </p>
                 )}
               </div>
@@ -387,7 +287,7 @@ export default function ToolPage() {
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <h2 className="text-lg font-semibold">Editable title starters</h2>
               <p className="mt-2 text-sm text-gray-600">
-                Curated packaging templates filled with current topic-aware keywords.
+                Routed through slot-based templates with repetition guards and fallback titles.
               </p>
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -397,7 +297,7 @@ export default function ToolPage() {
                       key={`title-${index}`}
                       className="rounded-xl border border-gray-200 p-4"
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-3">
                         <h3 className="text-sm font-semibold">Title variant {index + 1}</h3>
                         <button
                           onClick={() => copyText(title)}
@@ -409,7 +309,9 @@ export default function ToolPage() {
 
                       <textarea
                         value={title}
-                        onChange={(e) => updateTitle(index, e.target.value)}
+                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                          updateTitle(index, e.target.value)
+                        }
                         rows={3}
                         className="mt-3 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm leading-6 text-gray-700"
                       />
@@ -426,17 +328,18 @@ export default function ToolPage() {
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <h2 className="text-lg font-semibold">Editable description drafts</h2>
               <p className="mt-2 text-sm text-gray-600">
-                Structured for discoverability, links, and optional chapters.
+                Generated from the same classified signal layer so the titles and descriptions
+                stop fighting each other.
               </p>
 
               <div className="mt-4 grid gap-4">
                 {editableDescriptions.length ? (
                   editableDescriptions.map((description, index) => (
                     <div
-                    key={`description-${index}`}
-                    className="rounded-xl border border-gray-200 p-4"
+                      key={`description-${index}`}
+                      className="rounded-xl border border-gray-200 p-4"
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-3">
                         <h3 className="text-sm font-semibold">
                           Description variant {index + 1}
                         </h3>
@@ -450,7 +353,9 @@ export default function ToolPage() {
 
                       <textarea
                         value={description}
-                        onChange={(e) => updateDescription(index, e.target.value)}
+                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                          updateDescription(index, e.target.value)
+                        }
                         rows={10}
                         className="mt-3 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm leading-6 text-gray-700"
                       />
@@ -461,6 +366,61 @@ export default function ToolPage() {
                     Run a search to populate editable description drafts.
                   </p>
                 )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <h2 className="text-lg font-semibold">Tag bundles</h2>
+              <p className="mt-2 text-sm text-gray-600">
+                Filtered, ranked, deduplicated, and grouped so the output is less junky and more
+                strategic.
+              </p>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-3">
+                {[
+                  {
+                    label: "Core topic tags",
+                    values: packaging?.tags.coreTopicTags ?? [],
+                  },
+                  {
+                    label: "Format / angle tags",
+                    values: packaging?.tags.formatAngleTags ?? [],
+                  },
+                  {
+                    label: "Adjacent discovery tags",
+                    values: packaging?.tags.adjacentDiscoveryTags ?? [],
+                  },
+                ].map((group) => (
+                  <div key={group.label} className="rounded-xl border border-gray-200 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold">{group.label}</h3>
+                      {group.values.length ? (
+                        <button
+                          onClick={() => copyList(group.values)}
+                          className="rounded-lg border border-gray-300 px-3 py-1 text-xs font-medium"
+                        >
+                          Copy all
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {group.values.length ? (
+                        group.values.map((tag) => (
+                          <button
+                            key={`${group.label}-${tag}`}
+                            onClick={() => copyText(tag)}
+                            className="rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                          >
+                            {tag}
+                          </button>
+                        ))
+                      ) : (
+                        <p className="text-sm text-gray-500">No tags yet.</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -492,6 +452,39 @@ export default function ToolPage() {
                 )}
               </div>
             </div>
+
+            {isDevelopment && packaging ? (
+              <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-5">
+                <h2 className="text-lg font-semibold">Debug notes</h2>
+                <p className="mt-2 text-sm text-gray-600">
+                  Keep this visible in development while you test odd edge cases. Tiny goblin trap
+                  detector.
+                </p>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  <div className="rounded-xl border border-gray-200 p-4">
+                    <h3 className="text-sm font-semibold">Classified slots</h3>
+                    <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-5 text-gray-700">
+                      {JSON.stringify(packaging.debug.classified, null, 2)}
+                    </pre>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 p-4">
+                    <h3 className="text-sm font-semibold">Removed titles</h3>
+                    <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-5 text-gray-700">
+                      {JSON.stringify(packaging.debug.removedTitles, null, 2)}
+                    </pre>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 p-4">
+                    <h3 className="text-sm font-semibold">Removed tags</h3>
+                    <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-5 text-gray-700">
+                      {JSON.stringify(packaging.debug.removedTags, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </section>
         </div>
       </section>
